@@ -1,0 +1,10 @@
+numpy>=1.24,<3
+pillow>=10.0
+tqdm>=4.66
+
+# Core runtime
+torch>=2.0
+torchvision>=0.15
+
+# Detection
+ultralytics>=8.3.0
