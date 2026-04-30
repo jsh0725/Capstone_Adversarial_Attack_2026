@@ -1,15 +1,33 @@
 import os
 import torch
-import numpy as np
 from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms.functional as TF
 
 class VisDroneYOLODataset(Dataset):
-    def __init__(self, root_dir, size=640):
-        self.img_dir = os.path.join(root_dir, "images")
-        self.label_dir = os.path.join(root_dir, "labels")
-        self.img_names = [f for f in os.listdir(self.img_dir) if f.endswith(('.jpg', '.png'))]
+    def __init__(self, root_dir, size=640, split=None):
+        base_img_dir = os.path.join(root_dir, "images")
+        base_label_dir = os.path.join(root_dir, "labels")
+
+        # Prefer split-aware layout: images/<split>, labels/<split>
+        # Fallback to legacy flat layout: images, labels
+        if split:
+            split_img_dir = os.path.join(base_img_dir, split)
+            split_label_dir = os.path.join(base_label_dir, split)
+            if os.path.isdir(split_img_dir) and os.path.isdir(split_label_dir):
+                self.img_dir = split_img_dir
+                self.label_dir = split_label_dir
+            else:
+                self.img_dir = base_img_dir
+                self.label_dir = base_label_dir
+        else:
+            self.img_dir = base_img_dir
+            self.label_dir = base_label_dir
+
+        valid_ext = (".jpg", ".jpeg", ".png")
+        self.img_names = sorted(
+            f for f in os.listdir(self.img_dir) if f.lower().endswith(valid_ext)
+        )
         self.size = size
 
     def __len__(self): return len(self.img_names)

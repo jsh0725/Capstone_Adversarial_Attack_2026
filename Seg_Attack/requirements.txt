@@ -8,3 +8,4 @@ torchvision>=0.15
 
 # Detection
 ultralytics>=8.3.0
+lpips>=0.1.4

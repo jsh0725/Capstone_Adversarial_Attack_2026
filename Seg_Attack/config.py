@@ -55,6 +55,10 @@ VAL_DIR = os.environ.get("VISDRONE_VAL_DIR", os.path.join(BASE_DIR, "VisDrone201
 YOLO_PATH = os.environ.get("YOLO_PATH", os.path.join(PROJECT_DIR, "best.pt"))
 EXPERIMENT_ID = os.environ.get("EXPERIMENT_ID", "manual")
 RESULTS_CSV = os.environ.get("RESULTS_CSV", os.path.join(PROJECT_DIR, "experiment_results.csv"))
+RESULTS_DIR = os.environ.get(
+    "RESULTS_DIR",
+    os.path.join(PROJECT_DIR, "results", f"{EXPERIMENT_ID.lower()}results"),
+)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _RUNTIME_DEFAULTS = _detect_runtime_defaults()

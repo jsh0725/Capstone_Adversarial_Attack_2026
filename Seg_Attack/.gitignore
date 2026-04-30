@@ -1,0 +1,21 @@
+.venv/
+.vscode/
+__pycache__/
+*.py[cod]
+
+# Datasets and local model weights
+vhrv/
+VisDrone2019-DET-train/
+VisDrone2019-DET-val/
+*.pt
+*.pth
+
+# Experiment artifacts
+results/
+runs/
+eval_outputs/generated_val_sets/
+eval_outputs/examples/
+
+# Local/temporary files
+*.log
+*.tmp
