@@ -114,6 +114,13 @@ def run_fastsam_union_mask(fastsam_model, img_tensor, device, size):
     return union.unsqueeze(0).to(img_tensor.device)  # (1, 1, H, W)
 
 
+def build_janusnet_masks(fastsam_model, img_tensor, bbox_mask, device, size):
+    sam_obj = run_fastsam_union_mask(fastsam_model, img_tensor, device, size)
+    vanish_mask = sam_obj * bbox_mask
+    fabricate_mask = 1 - bbox_mask
+    return vanish_mask, fabricate_mask
+
+
 def norm_for_vis(t):
     return (t - t.min()) / (t.max() - t.min() + 1e-8)
 
@@ -178,14 +185,14 @@ def build_variant_image(variant, img, gt_mask, g_v, g_f, fastsam_model, device, 
         return torch.clamp(img + nv_c * gt_mask, 0, 1)
 
     if variant in {"janusnet", "hybrid_fastsam"}:
-        # JanusNET is our method name here: G_v + G_f + FastSAM mask-based stitching.
+        # JanusNET is our method name here: G_v on FastSAM/BBox objects + G_f on non-object background.
         # It is not a separate external architecture or downloadable implementation.
         nv = g_v(img)
         nf = g_f(img)
         nv_c = torch.clamp(nv, -config.EPSILON_V, config.EPSILON_V)
         nf_c = torch.clamp(nf, -config.EPSILON_F, config.EPSILON_F)
-        sam_obj = run_fastsam_union_mask(fastsam_model, img, device, size)
-        return torch.clamp(img + nv_c * sam_obj + nf_c * (1 - sam_obj), 0, 1)
+        vanish_mask, fabricate_mask = build_janusnet_masks(fastsam_model, img, gt_mask, device, size)
+        return torch.clamp(img + nv_c * vanish_mask + nf_c * fabricate_mask, 0, 1)
 
     raise ValueError(f"Unknown variant: {variant}")
 
@@ -265,8 +272,8 @@ def evaluate_single_variant(
                 # Keep train.py layout (noise panel + stats panel) while showing JanusNET perturbation.
                 nv = torch.clamp(g_v(img), -config.EPSILON_V, config.EPSILON_V)
                 nf = torch.clamp(g_f(img), -config.EPSILON_F, config.EPSILON_F)
-                sam_obj = run_fastsam_union_mask(fastsam_model, img, device, size)
-                noise_for_vis = nv * sam_obj + nf * (1 - sam_obj)
+                vanish_mask, fabricate_mask = build_janusnet_masks(fastsam_model, img, gt_mask, device, size)
+                noise_for_vis = nv * vanish_mask + nf * fabricate_mask
                 panel_attack_type = "janus"
 
             res_orig = yolo(img, verbose=False)

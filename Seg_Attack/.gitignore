@@ -9,12 +9,19 @@ VisDrone2019-DET-train/
 VisDrone2019-DET-val/
 *.pt
 *.pth
+*.mp4
+*.avi
+*.mov
+*.mkv
 
 # Experiment artifacts
 results/
 runs/
 eval_outputs/generated_val_sets/
 eval_outputs/examples/
+video_outputs/
+video_outputs_vhrv/
+video_outputs_visdrone/
 
 # Local/temporary files
 *.log
