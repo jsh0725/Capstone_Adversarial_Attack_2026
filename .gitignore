@@ -26,3 +26,8 @@ video_outputs_visdrone/
 # Local/temporary files
 *.log
 *.tmp
+
+# Local workspace folders not part of this repository
+Seg_Attack/
+Strawberry/
+TOG/
