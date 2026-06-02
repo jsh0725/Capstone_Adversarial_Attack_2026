@@ -1,7 +1,0 @@
-path: C:\Users\USER\Documents\python_projects\Seg_Attack\eval_outputs\generated_val_sets\fabricate
-train: images
-val: images
-test: images
-nc: 1
-names:
-  0: vessel

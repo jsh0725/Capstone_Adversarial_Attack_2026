@@ -49,15 +49,17 @@ def _detect_runtime_defaults():
 
 # 경로 설정 (환경변수 우선, 없으면 프로젝트 기준 기본값)
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
-BASE_DIR = os.environ.get("VISDRONE_BASE_DIR", PROJECT_DIR)
+DATASETS_DIR = os.path.join(PROJECT_DIR, "datasets")
+OUTPUTS_DIR = os.path.join(PROJECT_DIR, "outputs")
+BASE_DIR = os.environ.get("VISDRONE_BASE_DIR", DATASETS_DIR)
 TRAIN_DIR = os.environ.get("VISDRONE_TRAIN_DIR", os.path.join(BASE_DIR, "VisDrone2019-DET-train"))
 VAL_DIR = os.environ.get("VISDRONE_VAL_DIR", os.path.join(BASE_DIR, "VisDrone2019-DET-val"))
-YOLO_PATH = os.environ.get("YOLO_PATH", os.path.join(PROJECT_DIR, "best.pt"))
+YOLO_PATH = os.environ.get("YOLO_PATH", os.path.join(PROJECT_DIR, "weights", "detectors", "visdrone_best.pt"))
 EXPERIMENT_ID = os.environ.get("EXPERIMENT_ID", "manual")
-RESULTS_CSV = os.environ.get("RESULTS_CSV", os.path.join(PROJECT_DIR, "experiment_results.csv"))
+RESULTS_CSV = os.environ.get("RESULTS_CSV", os.path.join(OUTPUTS_DIR, "training", "experiment_results.csv"))
 RESULTS_DIR = os.environ.get(
     "RESULTS_DIR",
-    os.path.join(PROJECT_DIR, "results", f"{EXPERIMENT_ID.lower()}results"),
+    os.path.join(OUTPUTS_DIR, "training", "generators", f"{EXPERIMENT_ID.lower()}results"),
 )
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

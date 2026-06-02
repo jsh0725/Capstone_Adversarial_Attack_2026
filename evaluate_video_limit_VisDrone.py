@@ -15,7 +15,8 @@ from train import match_detections
 
 
 VARIANTS = ["original", "fabricate", "vanish", "janusnet"]
-JANUSNET_FABRICATE_ALPHA = 0.7
+DEFAULT_FABRICATE_ALPHA = 1.0
+DEFAULT_JANUSNET_FABRICATE_ALPHA = 0.7
 CLASS_COLORS = [
     (255, 99, 71),
     (60, 179, 113),
@@ -89,14 +90,49 @@ def build_janusnet_masks(fastsam_model, img_tensor, bbox_mask, device, size):
     return vanish_mask, fabricate_mask
 
 
-def build_variant_image(variant, img, pseudo_mask, g_v, g_f, fastsam_model, device, size):
+def limit_mask_by_score(mask, score, area_ratio):
+    area_ratio = float(np.clip(area_ratio, 0.0, 1.0))
+    if area_ratio >= 1.0:
+        return mask
+    if area_ratio <= 0.0:
+        return torch.zeros_like(mask)
+
+    valid = mask > 0
+    valid_count = int(valid.sum().item())
+    if valid_count <= 0:
+        return mask
+
+    keep_count = max(1, int(np.ceil(valid_count * area_ratio)))
+    values = score[valid].flatten()
+    if keep_count >= values.numel():
+        return mask
+
+    threshold = torch.topk(values, k=keep_count, largest=True).values.min()
+    return mask * (score >= threshold).float()
+
+
+def build_variant_image(
+    variant,
+    img,
+    pseudo_mask,
+    g_v,
+    g_f,
+    fastsam_model,
+    device,
+    size,
+    fabricate_alpha,
+    fabricate_area_ratio,
+):
     if variant == "original":
         return img
 
     if variant == "fabricate":
         nf = g_f(img)
         nf_c = torch.clamp(nf, -config.EPSILON_F, config.EPSILON_F)
-        return torch.clamp(img + nf_c * (1 - pseudo_mask), 0, 1)
+        fabricate_mask = 1 - pseudo_mask
+        score = nf_c.abs().mean(dim=1, keepdim=True)
+        fabricate_mask = limit_mask_by_score(fabricate_mask, score, fabricate_area_ratio)
+        return torch.clamp(img + fabricate_alpha * nf_c * fabricate_mask, 0, 1)
 
     if variant == "vanish":
         nv = g_v(img)
@@ -109,9 +145,67 @@ def build_variant_image(variant, img, pseudo_mask, g_v, g_f, fastsam_model, devi
         nv_c = torch.clamp(nv, -config.EPSILON_V, config.EPSILON_V)
         nf_c = torch.clamp(nf, -config.EPSILON_F, config.EPSILON_F)
         vanish_mask, fabricate_mask = build_janusnet_masks(fastsam_model, img, pseudo_mask, device, size)
-        return torch.clamp(img + nv_c * vanish_mask + JANUSNET_FABRICATE_ALPHA * nf_c * fabricate_mask, 0, 1)
+        score = nf_c.abs().mean(dim=1, keepdim=True)
+        fabricate_mask = limit_mask_by_score(fabricate_mask, score, fabricate_area_ratio)
+        return torch.clamp(img + nv_c * vanish_mask + fabricate_alpha * nf_c * fabricate_mask, 0, 1)
 
     raise ValueError(f"Unknown variant: {variant}")
+
+
+def initial_fabricate_alpha(variant, args):
+    if variant == "fabricate":
+        return args.fabricate_alpha
+    if variant == "janusnet":
+        return args.janusnet_fabricate_alpha
+    return 0.0
+
+
+def should_limit_variant(variant):
+    return variant in {"fabricate", "janusnet"}
+
+
+def build_and_detect_with_limit(
+    variant,
+    img,
+    pseudo_mask,
+    res_orig,
+    yolo,
+    g_v,
+    g_f,
+    fastsam_model,
+    device,
+    size,
+    args,
+):
+    alpha = initial_fabricate_alpha(variant, args)
+    max_new = args.max_new_per_frame
+    attempts = 0
+    limit_applied = False
+
+    while True:
+        attempts += 1
+        adv = build_variant_image(
+            variant=variant,
+            img=img,
+            pseudo_mask=pseudo_mask,
+            g_v=g_v,
+            g_f=g_f,
+            fastsam_model=fastsam_model,
+            device=device,
+            size=size,
+            fabricate_alpha=alpha,
+            fabricate_area_ratio=args.fabricate_area_ratio,
+        )
+        res_adv = yolo(adv, verbose=False)
+        missed, new, changed = match_detections(res_orig, res_adv[0])
+
+        if max_new is None or not should_limit_variant(variant) or new <= max_new:
+            return adv, res_adv, missed, new, changed, alpha, attempts, limit_applied
+        if attempts >= args.limit_attempts or alpha <= args.min_fabricate_alpha:
+            return adv, res_adv, missed, new, changed, alpha, attempts, limit_applied
+
+        limit_applied = True
+        alpha = max(args.min_fabricate_alpha, alpha * args.alpha_decay)
 
 
 def image_pair_metrics(orig, adv):
@@ -226,19 +320,26 @@ def open_writer(path, fps, frame_size):
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Evaluate VisDrone video attacks for original/fabricate/vanish/janusnet modes.")
+    p = argparse.ArgumentParser(description="Evaluate VisDrone video attacks with controllable Fabricate generation limits.")
     p.add_argument("--source", required=True, help="Input video path")
     p.add_argument("--weights", default="weights/detectors/visdrone_best.pt", help="VisDrone detector weights path")
     p.add_argument("--gv", default="outputs/training/generators/visdrone_vresults/G_v_best.pth", help="VisDrone vanish generator checkpoint")
     p.add_argument("--gf", default="outputs/training/generators/visdrone_fresults/G_f_best.pth", help="VisDrone fabricate generator checkpoint")
     p.add_argument("--fastsam-weights", default="weights/segmentation/FastSAM-s.pt", help="FastSAM weights path")
     p.add_argument("--variants", nargs="+", default=VARIANTS)
-    p.add_argument("--outdir", default="outputs/video_eval/visdrone/color_overlay")
+    p.add_argument("--outdir", default="outputs/video_eval/visdrone/limit")
     p.add_argument("--imgsz", type=int, default=640)
     p.add_argument("--device", default="", help="cuda, cuda:0, or cpu; empty = auto")
     p.add_argument("--conf-thres", type=float, default=0.25, help="Pseudo-mask detector confidence threshold")
     p.add_argument("--max-frames", type=int, default=None, help="Limit processed frames")
     p.add_argument("--save-overlay", action="store_true", help="Save side-by-side original/attacked detector overlays")
+    p.add_argument("--fabricate-alpha", type=float, default=DEFAULT_FABRICATE_ALPHA, help="Fabricate-mode G_f strength")
+    p.add_argument("--janusnet-fabricate-alpha", type=float, default=DEFAULT_JANUSNET_FABRICATE_ALPHA, help="JanusNET G_f strength")
+    p.add_argument("--fabricate-area-ratio", type=float, default=1.0, help="Fraction of non-object mask where G_f is applied")
+    p.add_argument("--max-new-per-frame", type=int, default=None, help="Reduce G_f alpha when new detections exceed this cap")
+    p.add_argument("--min-fabricate-alpha", type=float, default=0.1, help="Lowest adaptive G_f alpha")
+    p.add_argument("--alpha-decay", type=float, default=0.8, help="Adaptive alpha multiplier when new detections exceed cap")
+    p.add_argument("--limit-attempts", type=int, default=5, help="Maximum adaptive retries per frame and variant")
     return p.parse_args()
 
 
@@ -308,6 +409,9 @@ def main():
             "psnr": 0.0,
             "linf": 0.0,
             "sec_per_frame": 0.0,
+            "effective_alpha": 0.0,
+            "limit_attempts": 0.0,
+            "limited_frames": 0.0,
         }
         for v in variants
     }
@@ -330,23 +434,33 @@ def main():
 
                     for variant in variants:
                         t0 = time.perf_counter()
-                        adv = build_variant_image(
+                        (
+                            adv,
+                            res_adv,
+                            missed,
+                            new,
+                            changed,
+                            effective_alpha,
+                            limit_attempts,
+                            limit_applied,
+                        ) = build_and_detect_with_limit(
                             variant=variant,
                             img=img,
                             pseudo_mask=pseudo_mask,
+                            res_orig=res_orig[0],
+                            yolo=yolo,
                             g_v=g_v,
                             g_f=g_f,
                             fastsam_model=fastsam,
                             device=device,
                             size=size,
+                            args=args,
                         )
-                        res_adv = yolo(adv, verbose=False)
                         sec = time.perf_counter() - t0
 
                         psnr, linf = (float("inf"), 0.0) if variant == "original" else image_pair_metrics(img, adv)
                         n_orig = len(res_orig[0].boxes)
                         n_adv = len(res_adv[0].boxes)
-                        missed, new, changed = match_detections(res_orig[0], res_adv[0])
 
                         writers[variant].write(tensor_to_bgr(adv))
                         if args.save_overlay:
@@ -365,15 +479,30 @@ def main():
                             "psnr": psnr,
                             "linf": linf,
                             "sec_per_frame": sec,
+                            "effective_alpha": effective_alpha,
+                            "limit_attempts": limit_attempts,
+                            "limit_applied": int(limit_applied),
                         }
                         frame_rows.append(row)
 
                         s = summary[variant]
                         s["frames"] += 1
-                        for key in ["orig_det", "adv_det", "missed", "new", "changed", "psnr", "linf", "sec_per_frame"]:
+                        for key in [
+                            "orig_det",
+                            "adv_det",
+                            "missed",
+                            "new",
+                            "changed",
+                            "psnr",
+                            "linf",
+                            "sec_per_frame",
+                            "effective_alpha",
+                            "limit_attempts",
+                        ]:
                             if key == "psnr" and np.isinf(row[key]):
                                 continue
                             s[key] += float(row[key])
+                        s["limited_frames"] += float(row["limit_applied"])
 
                 frame_idx += 1
                 pbar.update(1)
@@ -385,7 +514,21 @@ def main():
             writer.release()
 
     with open(frame_csv, "w", newline="", encoding="utf-8") as f:
-        fieldnames = ["frame", "variant", "orig_det", "adv_det", "missed", "new", "changed", "psnr", "linf", "sec_per_frame"]
+        fieldnames = [
+            "frame",
+            "variant",
+            "orig_det",
+            "adv_det",
+            "missed",
+            "new",
+            "changed",
+            "psnr",
+            "linf",
+            "sec_per_frame",
+            "effective_alpha",
+            "limit_attempts",
+            "limit_applied",
+        ]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
         w.writerows(frame_rows)
@@ -405,6 +548,9 @@ def main():
             "psnr": "inf" if variant == "original" else s["psnr"] / psnr_n,
             "linf": s["linf"] / n,
             "sec_per_frame": s["sec_per_frame"] / n,
+            "effective_alpha": s["effective_alpha"] / n,
+            "limit_attempts_per_frame": s["limit_attempts"] / n,
+            "limited_frame_ratio": s["limited_frames"] / n,
         })
 
     with open(summary_csv, "w", newline="", encoding="utf-8") as f:
@@ -419,6 +565,9 @@ def main():
             "psnr",
             "linf",
             "sec_per_frame",
+            "effective_alpha",
+            "limit_attempts_per_frame",
+            "limited_frame_ratio",
         ]
         w = csv.DictWriter(f, fieldnames=fieldnames)
         w.writeheader()
@@ -436,7 +585,9 @@ def main():
             f"[{r['variant']:<10}] "
             f"orig_det={r['orig_det_per_frame']:.2f}  adv_det={r['adv_det_per_frame']:.2f}  "
             f"missed={r['missed_per_frame']:.2f}  new={r['new_per_frame']:.2f}  "
-            f"PSNR={r['psnr']}  Linf={r['linf']:.4f}  Speed={r['sec_per_frame']:.4f}s/frame"
+            f"PSNR={r['psnr']}  Linf={r['linf']:.4f}  "
+            f"alpha={r['effective_alpha']:.3f}  limited={r['limited_frame_ratio']:.2f}  "
+            f"Speed={r['sec_per_frame']:.4f}s/frame"
         )
 
 

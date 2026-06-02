@@ -256,6 +256,12 @@ def make_stats_panel(n_orig, n_adv, n_missed, n_new, n_changed,
         main_rate   = n_missed / max(n_orig, 1) * 100
         rate_label  = f"Suppression Rate:  {main_rate:.1f}%"
         rate_col    = (255, 80, 80) if n_missed > 0 else (120, 120, 120)
+    elif attack_type in {"janus", "janusnet", "hybrid_fastsam"}:
+        title       = "JANUSNET  ATTACK"
+        title_col   = (180, 120, 255)
+        main_rate   = (n_missed + n_new) / max(n_orig, 1) * 100
+        rate_label  = f"Combined Change Rate:  {main_rate:.1f}%"
+        rate_col    = (180, 120, 255) if (n_missed + n_new) > 0 else (120, 120, 120)
     else:
         title       = "FABRICATE  ATTACK"
         title_col   = (90, 200, 255)
