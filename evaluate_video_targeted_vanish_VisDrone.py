@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import csv
 import re
 import time
@@ -117,6 +117,64 @@ def build_targeted_vanish_image(img, target_mask, g_v):
     return torch.clamp(img + noise * target_mask, 0, 1)
 
 
+def clamp_linf_from_original(orig, adv, max_linf):
+    if max_linf <= 0:
+        return adv
+    return torch.clamp(torch.max(torch.min(adv, orig + max_linf), orig - max_linf), 0, 1)
+
+
+def run_feedback_vanish(
+    img,
+    initial_mask,
+    detector,
+    fastsam,
+    g_v,
+    class_ids,
+    conf_thres,
+    device,
+    size,
+    max_steps,
+    residual_mask_mode,
+    max_linf,
+):
+    adv = img
+    current_mask = initial_mask
+    cumulative_mask = torch.zeros_like(initial_mask)
+    result_adv = None
+    steps_used = 0
+
+    for step_idx in range(max(1, max_steps)):
+        if float(current_mask.max().item()) <= 0:
+            break
+
+        cumulative_mask = torch.clamp(cumulative_mask + current_mask, 0, 1)
+        adv = build_targeted_vanish_image(adv, current_mask, g_v)
+        adv = clamp_linf_from_original(img, adv, max_linf)
+        result_adv = detector(adv, verbose=False)[0]
+        steps_used += 1
+
+        target_adv = filter_result_by_classes(result_adv, class_ids)
+        if len(target_adv.boxes) == 0 or step_idx >= max_steps - 1:
+            break
+
+        if residual_mask_mode == "fastsam":
+            current_mask, _, _ = build_target_mask(
+                fastsam=fastsam,
+                img=adv,
+                original_result=result_adv,
+                class_ids=class_ids,
+                conf_thres=conf_thres,
+                device=device,
+                size=size,
+            )
+        else:
+            current_mask = result_to_mask(target_adv, size, device, conf_thres=conf_thres)
+
+    if result_adv is None:
+        result_adv = detector(adv, verbose=False)[0]
+    return adv, result_adv, cumulative_mask, steps_used
+
+
 def draw_target_highlights(img, result, class_ids):
     out = img.copy()
     if result.boxes is None or len(result.boxes) == 0:
@@ -192,6 +250,24 @@ def parse_args():
     p.add_argument("--device", default="", help="cuda, cuda:0, or cpu; empty = auto")
     p.add_argument("--conf-thres", type=float, default=0.25)
     p.add_argument("--max-frames", type=int, default=None)
+    p.add_argument(
+        "--vanish-steps",
+        type=int,
+        default=1,
+        help="Repeat Vanish on remaining target detections. 1 keeps the original single-pass behavior.",
+    )
+    p.add_argument(
+        "--residual-mask",
+        choices=["bbox", "fastsam"],
+        default="bbox",
+        help="Mask for remaining detections in repeated steps. bbox is faster; fastsam is tighter.",
+    )
+    p.add_argument(
+        "--max-linf",
+        type=float,
+        default=float(config.EPSILON_V),
+        help="Maximum total pixel perturbation from the original image during repeated Vanish.",
+    )
     p.add_argument("--save-overlay", action="store_true", help="Save side-by-side detector overlay")
     p.add_argument("--show", action="store_true", help="Display live side-by-side overlay")
     p.add_argument("--interactive", action="store_true", help="Enable live keyboard controls in the preview window")
@@ -277,15 +353,33 @@ def main():
                         device=device,
                         size=size,
                     )
-                    adv = build_targeted_vanish_image(img, target_mask, g_v) if attack_enabled else img
-                    result_adv = yolo(adv, verbose=False)[0]
+                    if attack_enabled:
+                        adv, result_adv, applied_mask, vanish_steps_used = run_feedback_vanish(
+                            img=img,
+                            initial_mask=target_mask,
+                            detector=yolo,
+                            fastsam=fastsam,
+                            g_v=g_v,
+                            class_ids=class_ids,
+                            conf_thres=args.conf_thres,
+                            device=device,
+                            size=size,
+                            max_steps=max(1, args.vanish_steps),
+                            residual_mask_mode=args.residual_mask,
+                            max_linf=max(0.0, args.max_linf),
+                        )
+                    else:
+                        adv = img
+                        result_adv = yolo(adv, verbose=False)[0]
+                        applied_mask = torch.zeros_like(target_mask)
+                        vanish_steps_used = 0
                     sec = time.perf_counter() - t0
 
                 target_adv = filter_result_by_classes(result_adv, class_ids)
                 missed, new, changed = match_detections(result_orig, result_adv)
                 target_missed, target_new, target_changed = match_detections(target_orig, target_adv)
                 psnr, linf = image_pair_metrics(img, adv)
-                mask_ratio = float(target_mask.mean().item())
+                mask_ratio = float(applied_mask.mean().item())
 
                 raw_writer.write(tensor_to_bgr(adv))
                 pair = draw_pair(
@@ -311,6 +405,7 @@ def main():
                         "target": target,
                         "attack_enabled": int(attack_enabled),
                         "target_boxes": target_box_count,
+                        "vanish_steps_used": vanish_steps_used,
                         "mask_area_ratio": mask_ratio,
                         "orig_det": len(result_orig.boxes),
                         "adv_det": len(result_adv.boxes),
@@ -380,6 +475,7 @@ def main():
         "target",
         "attack_enabled",
         "target_boxes",
+        "vanish_steps_used",
         "mask_area_ratio",
         "orig_det",
         "adv_det",
