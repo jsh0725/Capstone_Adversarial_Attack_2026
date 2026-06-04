@@ -19,6 +19,29 @@ VARIANTS = ["original", "fabricate", "vanish", "janusnet"]
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
 
+def infer_label_dir(base, img_dir, split):
+    candidates = [
+        base / "labels" / split,
+    ]
+
+    parts = list(img_dir.parts)
+    if "images" in parts:
+        idx = len(parts) - 1 - parts[::-1].index("images")
+        label_parts = parts.copy()
+        label_parts[idx] = "labels"
+        candidates.append(Path(*label_parts))
+
+    candidates.append(img_dir.parent / "labels")
+
+    for candidate in candidates:
+        candidate = candidate.resolve()
+        if candidate.exists():
+            return candidate
+
+    tried = "\n  ".join(str(p.resolve()) for p in candidates)
+    raise FileNotFoundError(f"Label dir not found. Tried:\n  {tried}")
+
+
 def resolve_dataset_paths(data_yaml, split="val"):
     with open(data_yaml, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
@@ -32,11 +55,9 @@ def resolve_dataset_paths(data_yaml, split="val"):
         raise KeyError(f"Split '{split}' is not defined in {data_yaml}")
 
     img_dir = (base / rel).resolve()
-    lbl_dir = (base / "labels" / split).resolve()
+    lbl_dir = infer_label_dir(base, img_dir, split)
     if not img_dir.exists():
         raise FileNotFoundError(f"Image dir not found: {img_dir}")
-    if not lbl_dir.exists():
-        raise FileNotFoundError(f"Label dir not found: {lbl_dir}")
 
     names = data.get("names", [])
     nc = int(data.get("nc", len(names) if names else 0))
@@ -312,18 +333,18 @@ def evaluate_single_variant(
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default="vhrv/vhrv.yaml", help="Dataset yaml")
+    parser.add_argument("--data", type=str, default="datasets/vhrv/vhrv.yaml", help="Dataset yaml")
     parser.add_argument("--split", type=str, default="val", choices=["train", "val", "test"], help="Dataset split")
-    parser.add_argument("--weights", type=str, default="vhrv_yolo11x.pt", help="Detector weights path")
-    parser.add_argument("--gv", type=str, default="results/vhrv_vresults/G_v_best.pth", help="Vanish generator checkpoint")
-    parser.add_argument("--gf", type=str, default="results/vhrv_fresults/G_f_best.pth", help="Fabricate generator checkpoint")
-    parser.add_argument("--outdir", type=str, default="eval_outputs", help="Output directory")
+    parser.add_argument("--weights", type=str, default="weights/detectors/vhrv_yolo11x.pt", help="Detector weights path")
+    parser.add_argument("--gv", type=str, default="outputs/training/generators/vhrv_vresults/G_v_best.pth", help="Vanish generator checkpoint")
+    parser.add_argument("--gf", type=str, default="outputs/training/generators/vhrv_fresults/G_f_best.pth", help="Fabricate generator checkpoint")
+    parser.add_argument("--outdir", type=str, default="outputs/image_eval/vhrv", help="Output directory")
     parser.add_argument("--imgsz", type=int, default=640, help="Square image size")
     parser.add_argument("--batch", type=int, default=1, help="YOLO val batch")
     parser.add_argument("--device", type=str, default="", help="cuda, cuda:0, or cpu; empty = auto")
     parser.add_argument("--variants", nargs="+", default=VARIANTS, help="Modes to evaluate")
     parser.add_argument("--max-images", type=int, default=None, help="Limit number of val images")
-    parser.add_argument("--fastsam-weights", type=str, default="FastSAM-s.pt", help="FastSAM weights path")
+    parser.add_argument("--fastsam-weights", type=str, default="weights/segmentation/FastSAM-s.pt", help="FastSAM weights path")
     parser.add_argument("--examples-per-setting", type=int, default=10, help="Number of sample images per setting")
     args = parser.parse_args()
 

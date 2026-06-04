@@ -1,0 +1,7 @@
+path: C:\Users\USER\Documents\python_projects\Seg_Attack\outputs\image_eval\vhrv\generated_val_sets\original
+train: images
+val: images
+test: images
+nc: 1
+names:
+  0: vessel

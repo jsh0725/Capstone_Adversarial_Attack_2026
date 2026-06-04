@@ -4,9 +4,10 @@ __pycache__/
 *.py[cod]
 
 # Datasets and local model weights
-vhrv/
-VisDrone2019-DET-train/
-VisDrone2019-DET-val/
+datasets/vhrv/
+datasets/VisDrone2019-DET-train/
+datasets/VisDrone2019-DET-val/
+weights/
 *.pt
 *.pth
 *.mp4
@@ -15,13 +16,12 @@ VisDrone2019-DET-val/
 *.mkv
 
 # Experiment artifacts
-results/
-runs/
-eval_outputs/generated_val_sets/
-eval_outputs/examples/
-video_outputs/
-video_outputs_vhrv/
-video_outputs_visdrone/
+outputs/training/generators/
+outputs/yolo_runs/
+outputs/image_eval/*/generated_val_sets/
+outputs/image_eval/*/examples/
+outputs/video_eval/
+outputs/_temporary/
 
 # Local/temporary files
 *.log
